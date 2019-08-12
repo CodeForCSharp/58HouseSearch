@@ -112,6 +112,10 @@ namespace HouseCrawler.Web.Controllers
 
         private IEnumerable<HouseInfo> ParseRoom(string html)
         {
+            if (html.Contains("验证码"))
+            {
+                return new List<HouseInfo>();
+            }
             var page = new HtmlParser().Parse(html);
             return page.QuerySelector("ul.listUl").QuerySelectorAll("li[logr]").Select(room =>
             {
@@ -123,9 +127,8 @@ namespace HouseCrawler.Web.Controllers
                 {
                     HouseLocation = room.QuerySelector("p.add").QuerySelectorAll("a").Last().TextContent.Replace("租房", ""),
                     HouseTitle = a.TextContent,
-                    Money = housePrice.ToString(),
-                    HouseURL = a.GetAttribute("href"),
-                    LocationMarkBG = markBGType,
+                    DisPlayPrice = housePrice.ToString(),
+                    HouseOnlineURL = a.GetAttribute("href")
                 };
             });
         }

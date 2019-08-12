@@ -1,24 +1,74 @@
-﻿using System;
-using System.Globalization;
-using System.Linq;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using HouseCrawler.Core.Models;
-using HouseCrawler.Core.Common;
 using HouseCrawler.Core.Jobs;
-using HouseCrawler.Web.DAL;
-
-// For more information on enabling MVC for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
+using StackExchange.Redis;
+using System;
+using HouseCrawler.Core.Common;
+using HouseCrawler.Core.Service;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace HouseCrawler.Core.Controllers
 {
     public class HomeController : Controller
     {
-        private readonly CrawlerDataContent _dataContent = new CrawlerDataContent();
 
+        private HouseDapper houseDapper;
+
+        private TodayHouseDashboardJob houseDashboardJob;
+
+        private SyncHousesToESJob syncHousesToESJob;
+
+        private HouseDashboardService houseDashboardService;
+
+
+        private PinPaiGongYuHouseCrawler pinpai;
+        private PeopleRentingCrawler people;
+        private DoubanHouseCrawler douban;
+        private CCBHouesCrawler ccbHouse;
+        private ZuberHouseCrawler zuber;
+        private MoGuHouseCrawler mogu;
+        private HKSpaciousCrawler hkSpacious;
+
+        private BaiXingHouseCrawler baixing;
+        ElasticsearchService elasticsearchService;
+
+        private RefreshHouseCacheJob refreshHouseCacheJob;
+
+        public HomeController(TodayHouseDashboardJob houseDashboardJob,
+                              HouseDapper houseDapper,
+                              HouseDashboardService houseDashboardService,
+                              PinPaiGongYuHouseCrawler pinpai,
+                              PeopleRentingCrawler people,
+                              DoubanHouseCrawler douban,
+                              CCBHouesCrawler ccbHouse,
+                              ZuberHouseCrawler zuber,
+                              MoGuHouseCrawler mogu,
+                              HKSpaciousCrawler hkSpacious,
+                              BaiXingHouseCrawler baixing,
+                              SyncHousesToESJob syncHousesToESJob,
+                              ElasticsearchService elasticsearchService,
+                              RefreshHouseCacheJob refreshHouseCacheJob)
+        {
+            this.houseDashboardJob = houseDashboardJob;
+            this.houseDapper = houseDapper;
+            this.houseDashboardService = houseDashboardService;
+            this.pinpai = pinpai;
+            this.people = people;
+            this.douban = douban;
+            this.ccbHouse = ccbHouse;
+            this.zuber = zuber;
+            this.mogu = mogu;
+            this.hkSpacious = hkSpacious;
+            this.baixing = baixing;
+            this.syncHousesToESJob = syncHousesToESJob;
+            this.elasticsearchService = elasticsearchService;
+            this.refreshHouseCacheJob = refreshHouseCacheJob;
+        }
         // GET: /<controller>/
         public IActionResult Index()
         {
-            return View(HouseSourceInfo.LoadCityHouseInfo());
+            return View(houseDashboardService.LoadDashboard());
         }
 
         public IActionResult HouseList()
@@ -26,82 +76,72 @@ namespace HouseCrawler.Core.Controllers
             return View();
         }
 
-        public IActionResult GetHouseInfo(string cityName, string source = "", int houseCount = 400, 
-            int withAnyDays = 3,string keyword ="")
+        public IActionResult GetHouseInfo(string cityName, string source = "", int houseCount = 500,
+            int withAnyDays = 7, string keyword = "")
         {
-            var houses = new DBHouseInfoDAL().SearchHouseInfo(cityName, source, houseCount, withAnyDays, keyword);
 
-            var lstRoomInfo = houses.Select(house =>
+            var houses = houseDapper.SearchHouses(new HouseSearchCondition()
             {
-                var markBGType = string.Empty;
-                int housePrice = (int)house.HousePrice;
-                if (housePrice > 0)
-                {
-                    markBGType = LocationMarkBGType.SelectColor(housePrice / 1000);
-                }
-
-                return new HouseInfo
-                {
-                    Money = house.DisPlayPrice,
-                    HouseURL = house.HouseOnlineURL,
-                    HouseLocation = house.HouseLocation,
-                    HouseTime = house.PubTime.ToString(CultureInfo.CurrentCulture),
-                    HousePrice = housePrice,
-                    LocationMarkBG = markBGType,
-                    DisplaySource = ConstConfigurationName.ConvertToDisPlayName(house.Source)
-                };
+                CityName = cityName,
+                HouseCount = houseCount,
+                IntervalDay = withAnyDays,
+                Keyword = keyword
             });
-            return Json(new { IsSuccess = true, HouseInfos = lstRoomInfo });
+            return Json(new { IsSuccess = true, HouseInfos = houses });
 
-
-        }
-
-
-        public IActionResult AddDouBanGroup(string doubanGroup, string cityName)
-        {
-            if (string.IsNullOrEmpty(doubanGroup) || string.IsNullOrEmpty(cityName))
-            {
-                return Json(new { IsSuccess = false, error = "请输入豆瓣小组Group和城市名称。" });
-            }
-            DoubanHouseCrawler.AddDoubanGroupConfig(doubanGroup, cityName);
-            return Json(new { IsSuccess = true });
         }
 
 
         public IActionResult RunJobs()
         {
-
-
-
-            DoubanHouseCrawler.CaptureHouseInfoFromConfig();
-            HouseSourceInfo.RefreshHouseSourceInfo();
-            PinPaiGongYuHouseCrawler.CapturPinPaiHouseInfo();
-
-            //Task.Factory.StartNew(() =>
-            //{
-            //    try
-            //    {
-
-            //        PeopleRentingCrawler.CapturHouseInfo();
-            //        DoubanHouseCrawler.CaptureHouseInfoFromConfig();
-            //        DoubanHouseCrawler.AnalyzeDoubanHouseContentAll();
-            //        HouseSourceInfo.RefreshHouseSourceInfo();
-            //    }
-            //    catch (Exception ex)
-            //    {
-            //        LogHelper.Error("RunJobs", ex);
-            //    }
-
-            //});
-
+            douban.Run();
+            pinpai.Run();
+            ccbHouse.Run();
+            mogu.Run();
             return View();
         }
+
+        public IActionResult RunZuber()
+        {
+            zuber.Run();
+            return View();
+        }
+
+        public IActionResult RunHK()
+        {
+            hkSpacious.Run();
+            return Json(new { success = true });
+        }
+
+
+        public IActionResult RunStatJob()
+        {
+            houseDashboardJob.Run();
+            return Json(new { success = true });
+        }
+
 
 
         public IActionResult StartGC()
         {
             new GCJob().Run();
+            //syncHousesToESJob.Run();
             return Json(new { isSuccess = true });
+        }
+
+
+        public IActionResult RunSyncHouse(string datetime)
+        {
+            DateTime pubTime = DateTime.Parse(datetime);
+            var houses = houseDapper.QueryByTimeSpan(pubTime, pubTime.AddHours(24));
+            elasticsearchService.SaveHousesToES(houses);
+            return Json(new { success = true });
+        }
+
+        public IActionResult RefreshHouseCache()
+        {
+            refreshHouseCacheJob.Run();
+            return Json(new { success = true });
         }
     }
 }

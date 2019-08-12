@@ -5,12 +5,14 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="initial-scale=1.0, user-scalable=no, width=device-width">
     <title>58公寓高德搜房(全国版)</title>
-    <link rel="stylesheet" href="http://cache.amap.com/lbs/static/main1119.css" />
-    <link rel="stylesheet" href="http://cache.amap.com/lbs/static/jquery.range.css" />
-    <link rel="stylesheet" href="http://cdn.amazeui.org/amazeui/2.7.1/css/amazeui.min.css" />
+    <link rel="stylesheet" href="https://cache.amap.com/lbs/static/main1119.css" />
+    <link rel="stylesheet" href="https://cache.amap.com/lbs/static/jquery.range.css" />
+    <script src="https://webapi.amap.com/maps?v=1.3&key=8a971a2f88a0ec7458d43b8bc03b6462&plugin=AMap.ArrivalRange,AMap.Scale,AMap.Geocoder,AMap.Transfer,AMap.Autocomplete,AMap.CitySearch,AMap.Walking"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/amazeui/2.7.1/css/amazeui.min.css" />
+    <!--引入UI组件库（1.0版本） -->
+    <script src="https://webapi.amap.com/ui/1.0/main.js"></script>
     <link href="~/CSS/common.css" rel="stylesheet" />
-    <script src="http://webapi.amap.com/maps?v=1.3&key=8a971a2f88a0ec7458d43b8bc03b6462&plugin=AMap.ArrivalRange,AMap.Scale,AMap.Geocoder,AMap.Transfer,AMap.Autocomplete,AMap.CitySearch,AMap.Walking"></script>
-    <script>
+     <script>
       
         var getViewDefaultDataAction = '@Url.Action("GetDefault58CityRoomData")';
         var getDataPageCount = '@Url.Action("Get58CityRoomPageCount")';
@@ -78,14 +80,14 @@
 
                 <div class="control-entry">
                     <div>
-                        <a href="~/HonestHouse">58同城诚信房源</a>
-                        <a href="~/PeopleRenting" style="margin-left:20px;">上海互助租房</a>
+                        <a href="~/Home">回到首页</a>
+                        <a href="~/PeopleRenting" style="margin-left:20px;" target="_blank">上海互助租房</a>
                         <br />
-                        <a href="~/DoubanHome?groupID=shanghaizufang&cityname=上海">豆瓣租房(上海)</a>
-                        <a href="~/DoubanHome?groupID=26926&cityname=北京" style="margin-left:20px;">豆瓣租房(北京)</a>
+                        <a href="~/DoubanHome?groupID=shanghaizufang&cityname=上海" target="_blank">豆瓣租房(上海)</a>
+                        <a href="~/DoubanHome?groupID=26926&cityname=北京" style="margin-left:20px;" target="_blank">豆瓣租房(北京)</a>
                         <br />
-                        <a href="~/DoubanHome?groupID=szzf&cityname=深圳">豆瓣租房(深圳)</a>
-                        <a href="~/DoubanHome?groupID=gz020&cityname=广州" style="margin-left:20px;">豆瓣租房(广州)</a>
+                        <a href="~/DoubanHome?groupID=szzf&cityname=深圳" target="_blank">豆瓣租房(深圳)</a>
+                        <a href="~/DoubanHome?groupID=gz020&cityname=广州" style="margin-left:20px;" target="_blank">豆瓣租房(广州)</a>
                     </div>
                 </div>
 

@@ -1,13 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
 using AngleSharp.Parser.Html;
-using System.IO;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
-using HouseCrawler.Core.DBService.DAL;
-using HouseCrawler.Core.DataContent;
+using RestSharp;
+using HouseCrawler.Core.Common;
+using AngleSharp.Dom;
+using Newtonsoft.Json.Linq;
 
 namespace HouseCrawler.Core
 {
@@ -15,86 +14,150 @@ namespace HouseCrawler.Core
     {
         private static HtmlParser htmlParser = new HtmlParser();
 
-        private static readonly CrawlerDataContent DataContent = new CrawlerDataContent();
+        private HouseDapper houseDapper;
 
-        private static CrawlerDAL crawlerDAL = new CrawlerDAL();
-
-        public static void CapturPinPaiHouseInfo()
+        private ConfigDapper configDapper;
+        public PinPaiGongYuHouseCrawler(HouseDapper houseDapper, ConfigDapper configDapper)
         {
-            foreach (var crawlerConfiguration in DataContent.CrawlerConfigurations.Where(c => c.ConfigurationName
-               == ConstConfigurationName.PinPaiGongYu && c.IsEnabled).ToList())
-            {
+            this.houseDapper = houseDapper;
+            this.configDapper = configDapper;
+        }
 
-                LogHelper.RunActionNotThrowEx(() => 
+
+        public void Run()
+        {
+            int captrueHouseCount = 0;
+            DateTime startTime = DateTime.Now;
+
+            foreach (var crawlerConfiguration in configDapper.GetList(ConstConfigName.PinPaiGongYu)
+            .Where(c => c.IsEnabled).ToList())
+            {
+                LogHelper.RunActionNotThrowEx(() =>
                 {
+                    List<BaseHouseInfo> houses = new List<BaseHouseInfo>();
                     var confInfo = JsonConvert.DeserializeObject<dynamic>(crawlerConfiguration.ConfigurationValue);
-
-                    for (var index = 0; index < confInfo.pagecount.Value; index++)
+                    for (var page = 0; page < confInfo.pagecount.Value; page++)
                     {
-                        var url = $"http://{confInfo.shortcutname.Value}.58.com/pinpaigongyu/pn/{index}";
-                        var htmlResult = HTTPHelper.GetHTMLByURL(url);
-                        var page = new HtmlParser().Parse(htmlResult);
-                        var lstLi = page.QuerySelectorAll("li").Where(element => element.HasAttribute("logr"));
-                        if (!lstLi.Any())
-                        {
-                            continue;
-                        }
-                        GetDataOnPageDoc(confInfo, page);
-                        DataContent.SaveChanges();
+                        var jsonDate = GetDataFromAPI(confInfo.shortcutname.Value, page);
+                        houses.AddRange(GetHouses(confInfo.shortcutname.Value, confInfo.cityname.Value, jsonDate));
                     }
-
+                    houseDapper.BulkInsertHouses(houses);
+                    captrueHouseCount = captrueHouseCount + houses.Count;
                 }, "CapturPinPaiHouseInfo", crawlerConfiguration);
-
             }
+
+            LogHelper.Info($"PinPaiGongYuHouseCrawler finish.本次共爬取到{captrueHouseCount}条数据，耗时{ (DateTime.Now - startTime).TotalSeconds}秒。");
         }
 
-        private static void GetDataOnPageDoc(dynamic confInfo, 
-            AngleSharp.Dom.Html.IHtmlDocument page)
+        private static List<BaseHouseInfo> GetHouses(string shortCutName, string cityName, string json)
         {
-            foreach (var element in page.QuerySelectorAll("li").Where(element => element.HasAttribute("logr")))
+            List<BaseHouseInfo> houseList = new List<BaseHouseInfo>();
+            var resultJObject = JsonConvert.DeserializeObject<JObject>(json);
+            foreach (var info in resultJObject["result"]["getListInfo"]["infolist"])
             {
-                var houseTitle = element.QuerySelector("h2").TextContent;
-                var houseInfoList = houseTitle.Split(' ');
-                int.TryParse(element.QuerySelector("b").TextContent, out var housePrice);
-                var onlineUrl = $"http://{confInfo.shortcutname.Value}.58.com" + element.QuerySelector("a").GetAttribute("href");
-                if (DataContent.ApartmentHouseInfos.Find(onlineUrl)!=null)
-                    continue;
-                var houseInfo = new ApartmentHouseInfo
+
+                var onlineUrl = $"https://{shortCutName}.58.com/pinpaigongyu/{info["infoID"].ToString()}x.shtml";
+                var housePrice = decimal.Parse(info["minPrice"].ToString());
+                var houseInfo = new BaseHouseInfo
                 {
-                    HouseTitle = houseTitle,
+                    HouseTitle = $"{info["title"].ToString()}-{info["layout"].ToString()}",
                     HouseOnlineURL = onlineUrl,
-                    DisPlayPrice = element.QuerySelector("b").TextContent,
-                    HouseLocation = new[] { "公寓", "青年社区" }.All(s => houseInfoList.Contains(s)) ? houseInfoList[0] : houseInfoList[1],
-                    DataCreateTime = DateTime.Now,
-                    Source = ConstConfigurationName.PinPaiGongYu,
+                    DisPlayPrice = info["priceTitle"].ToString(),
+                    HouseLocation = GetHouseLocation(info),
+                    Source = ConstConfigName.PinPaiGongYu,
                     HousePrice = housePrice,
-                    HouseText = houseTitle,
-                    LocationCityName = confInfo.cityname.Value,
-                    PubTime = DateTime.Now
+                    HouseText = info.ToString(),
+                    LocationCityName = cityName,
+                    PubTime = new DateTime(info["postDate"]["year"].ToObject<int>(),
+                    info["postDate"]["mon"].ToObject<int>(),
+                    info["postDate"]["mday"].ToObject<int>(),
+                    info["postDate"]["hours"].ToObject<int>(),
+                    info["postDate"]["minutes"].ToObject<int>(),
+                    info["postDate"]["seconds"].ToObject<int>()),
+                    PicURLs = info["picsUrl"].ToString()
                 };
-                DataContent.ApartmentHouseInfos.Add(houseInfo);
+                houseList.Add(houseInfo);
             }
+            return houseList;
         }
 
-        /// <summary>
-        /// 过滤无效的城市配置
-        /// </summary>
-        public static void FilterInvalidCityConfig()
+        private static string GetHouseLocation(JToken info)
         {
-            foreach (var doubanConf in DataContent.CrawlerConfigurations.Where(c => c.ConfigurationName
-               == ConstConfigurationName.PinPaiGongYu).ToList())
+            var houseLocation = "";
+            var title = info["title"].ToString();
+            var titleList = title.Split(" ");
+            if (titleList.Length >= 3)
             {
-                var confInfo = JsonConvert.DeserializeObject<dynamic>(doubanConf.ConfigurationValue);
-                var url = $"http://{confInfo.shortcutname.Value}.58.com/pinpaigongyu/pn/0";
-                var htmlResult = HTTPHelper.GetHTMLByURL(url);
-                var page = new HtmlParser().Parse(htmlResult);
-                var lstLi = page.QuerySelectorAll("li").Where(element => element.HasAttribute("logr"));
-                if (!lstLi.Any())
-                {
-                    doubanConf.IsEnabled = false;
-                }
+                houseLocation = titleList[2];
             }
-            DataContent.SaveChanges();
+            if (titleList.Length >= 4)
+            {
+                houseLocation = houseLocation + "-" + titleList[3];
+            }
+            if (string.IsNullOrEmpty(houseLocation))
+            {
+                houseLocation = info["titles"]["title"].ToString().Split("|")[1].Trim();
+            }
+            return houseLocation;
+        }
+        public static string GetDataFromAPI(string citySortName, int page)
+        {
+            string parameters = $"&localname={citySortName}&page={page}";
+            var client = new RestClient("https://appgongyu.58.com/house/listing/gongyu?tabkey=allcity&action=getListInfo&curVer=8.6.5&appId=1&os=android&format=json&geotype=baidu&v=1"
+            + parameters);
+            var request = new RestRequest(Method.GET);
+            request.AddHeader("user-agent", "okhttp/3.4.2");
+            request.AddHeader("connection", "Keep-Alive");
+            request.AddHeader("host", "appgongyu.58.com");
+            request.AddHeader("product", "58app");
+            request.AddHeader("lat", "31.328703");
+            request.AddHeader("r", "1920_1080");
+            request.AddHeader("ua", "SM801");
+            request.AddHeader("brand", "SMARTISAN");
+            request.AddHeader("location", "2,6180,6348");
+            request.AddHeader("58mac", "B4:0B:44:80:2E:B6");
+            request.AddHeader("platform", "android");
+            request.AddHeader("currentcid", "2");
+            request.AddHeader("rnsoerror", "0");
+            request.AddHeader("os", "android");
+            request.AddHeader("owner", "baidu");
+            request.AddHeader("deviceid", "57b4bf2216c7d1da");
+            request.AddHeader("m", "B4:0B:44:80:2E:B6");
+            request.AddHeader("cid", "2");
+            request.AddHeader("androidid", "57b4bf2216c7d1da");
+            request.AddHeader("apn", "WIFI");
+            request.AddHeader("uniqueid", "0aa38c71a1f1192af301c5ac03aa0198");
+            request.AddHeader("58ua", "58app");
+            request.AddHeader("nettype", "wifi");
+            request.AddHeader("osarch", "arm64-v8a");
+            request.AddHeader("productorid", "1");
+            request.AddHeader("version", "8.6.5");
+            request.AddHeader("bangbangid", "1080866410605347478");
+            request.AddHeader("bundle", "com.wuba");
+            request.AddHeader("maptype", "2");
+            request.AddHeader("totalsize", "24.7");
+            request.AddHeader("rimei", "990006210059787");
+            request.AddHeader("id58", "97987698730095");
+            request.AddHeader("xxzl_deviceid", "IaqlqznImYdoMvhJpnkjFpsGfWr09FnsJscDy3FpeK+k+afS/XcvibL6qHQue6uz");
+            request.AddHeader("marketchannelid", "1593");
+            request.AddHeader("osv", "5.1.1");
+            request.AddHeader("lon", "121.39829");
+            request.AddHeader("official", "true");
+            IRestResponse response = client.Execute(request);
+            return response.Content;
+        }
+
+
+
+        public static void Test()
+        {
+            var result = GetDataFromAPI("sh", 1);
+            var list = GetHouses("sh", "上海", result);
+            if (list != null)
+            {
+
+            }
+
         }
 
 
@@ -1826,23 +1889,22 @@ namespace HouseCrawler.Core
             dynamic lstCity = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(cityJsonString);
             if (lstCity != null)
             {
-                var lst = new List<BizCrawlerConfiguration>();
+                var lst = new List<CrawlerConfiguration>();
                 foreach (var cityInfo in lstCity)
                 {
-                    if (cityInfo?.cityName?.Value != null &&cityInfo.shortCut?.Value != null)
+                    if (cityInfo?.cityName?.Value != null && cityInfo.shortCut?.Value != null)
                     {
-                        lst.Add(new BizCrawlerConfiguration()
+                        lst.Add(new CrawlerConfiguration()
                         {
                             ConfigurationKey = 0,
                             ConfigurationValue = $"{{'cityname':'{Convert.ToString(cityInfo.cityName.Value)}','shortcutname':'{Convert.ToString(cityInfo.shortCut.Value)}','pagecount':10}}",
-                            ConfigurationName = ConstConfigurationName.PinPaiGongYu,
-                            DataCreateTime = DateTime.Now,
+                            ConfigurationName = ConstConfigName.PinPaiGongYu,
                             IsEnabled = true,
                         });
                     }
                 }
-                DataContent.AddRange(lst);
-                DataContent.SaveChanges();
+                //DataContent.AddRange(lst);
+                //DataContent.SaveChanges();
 
 
             }

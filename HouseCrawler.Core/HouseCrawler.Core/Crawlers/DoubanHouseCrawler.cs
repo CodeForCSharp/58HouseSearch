@@ -1,51 +1,47 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Threading.Tasks;
-using AngleSharp.Parser.Html;
-using HouseCrawler.Core.Models;
 using HouseCrawler.Core.Common;
-using HouseCrawler.Web.DAL;
-using HouseCrawler.Core.DBService.DAL;
-using HouseCrawler.Core.DataContent;
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace HouseCrawler.Core
 {
     public class DoubanHouseCrawler
     {
-        private static readonly HtmlParser HtmlParser = new HtmlParser();
+        private HouseDapper houseDapper;
 
-        private static readonly CrawlerDataContent DataContent = new CrawlerDataContent();
+        private ConfigDapper configDapper;
+        public DoubanHouseCrawler(HouseDapper houseDapper, ConfigDapper configDapper)
+        {
+            this.houseDapper = houseDapper;
+            this.configDapper = configDapper;
+        }
 
-        private static CrawlerDAL crawlerDAL = new CrawlerDAL();
-
-        public static void CaptureHouseInfoFromConfig()
+        public void Run()
         {
             try
             {
                 int captrueHouseCount = 0;
-                foreach (var doubanConf in DataContent.CrawlerConfigurations
-                    .Where(c => c.ConfigurationName == ConstConfigurationName.Douban).ToList())
+                DateTime startTime = DateTime.Now;
+                foreach (var doubanConf in configDapper.GetList(ConstConfigName.Douban))
                 {
                     LogHelper.RunActionNotThrowEx(() =>
                     {
+                        List<BaseHouseInfo> houses = new List<BaseHouseInfo>();
                         var confInfo = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(doubanConf.ConfigurationValue);
-
                         for (var pageIndex = 0; pageIndex < confInfo.pagecount.Value; pageIndex++)
                         {
-                            var lstHouseInfo = GetDataFromAPI(confInfo.groupid.Value,
+                            var lstHouseInfo = GetHouseData(confInfo.groupid.Value,
                                 confInfo.cityname.Value, pageIndex);
-                            DataContent.DoubanHouseInfos.AddRange(lstHouseInfo);
-                            DataContent.SaveChanges();
-                            captrueHouseCount = captrueHouseCount + lstHouseInfo.Count;
+                            houses.AddRange(lstHouseInfo);
                         }
-                    }, "CaptureHouseInfoFromConfig", doubanConf);
-
+                        captrueHouseCount = captrueHouseCount + houses.Count;
+                        houseDapper.BulkInsertHouses(houses);
+                    }, "DoubanHouseCrawler CaptureHouseInfo ", doubanConf);
                 }
-                HouseSourceInfo.RefreshHouseSourceInfo();
-
-                BizCrawlerLog.SaveLog("爬取豆瓣租房数据", $"本次共爬取到{captrueHouseCount}条数据。", 1);
+                LogHelper.Info($"DoubanHouseCrawler finish.本次共爬取到{captrueHouseCount}条数据，耗时{ (DateTime.Now - startTime).TotalSeconds}秒。");
             }
             catch (Exception ex)
             {
@@ -53,106 +49,71 @@ namespace HouseCrawler.Core
             }
         }
 
-        public static void AddDoubanGroupConfig(string groupID, string cityName, int pageIndex = 0)
+        public static List<BaseHouseInfo> GetHouseData(string groupID, string cityName, int pageIndex)
         {
-            var cityInfo = $"{{ 'groupid':'{groupID}','cityname':'{cityName}','pagecount':5}}";
-
-            var doubanConfig = DataContent.CrawlerConfigurations
-                .FirstOrDefault(c => c.ConfigurationName == ConstConfigurationName.Douban && c.ConfigurationValue == cityInfo);
-            if (doubanConfig != null)
-                return;
-            var lstHouseInfo = GetDataFromAPI(groupID, cityName, pageIndex);
-            #region add douban group config
-
-            if (lstHouseInfo.Count > 0)
+            List<BaseHouseInfo> lstHouseInfo = new List<BaseHouseInfo>();
+            var apiURL = $"https://api.douban.com/v2/group/{groupID}/topics?start={pageIndex * 50}&count=50";
+            LogHelper.Debug($"url:{apiURL},groupID:{groupID}, city:{cityName}");
+            var result = GetAPIResult(apiURL);
+            if (string.IsNullOrEmpty(result))
             {
-                var config = new BizCrawlerConfiguration()
-                {
-                    ConfigurationKey = 0,
-                    ConfigurationValue = cityInfo,
-                    ConfigurationName = ConstConfigurationName.Douban,
-                    DataCreateTime = DateTime.Now,
-                    IsEnabled = true,
-                };
-                DataContent.AddRange(lstHouseInfo);
-                DataContent.Add(config);
-                DataContent.SaveChanges();
-
-                HouseSourceInfo.RefreshHouseSourceInfo();
+                return lstHouseInfo;
             }
-            #endregion
-
-        }
-
-
-        public static List<DoubanHouseInfo> GetDataFromAPI(string groupID, string cityName, int pageIndex)
-        {
-            List<DoubanHouseInfo> lstHouseInfo = new List<DoubanHouseInfo>();
-            var apiURL = $"https://api.douban.com/v2/group/{groupID}/topics?start={pageIndex * 50}";
-            var doubanTopic = WebAPIHelper.GetAPIResult<DoubanTopic>(apiURL);
-            if (doubanTopic != null && doubanTopic.topics != null)
+            var resultJObject = JsonConvert.DeserializeObject<JObject>(result);
+            foreach (var topic in resultJObject["topics"])
             {
-                foreach (var topic in doubanTopic.topics)
+                var housePrice = JiebaTools.GetHousePrice(topic["content"].ToString());
+                var photos = topic["photos"]?.Select(photo => photo["alt"].ToString()).ToList();
+                var house = new BaseHouseInfo()
                 {
-                    if (DataContent.DoubanHouseInfos.Any(h => h.HouseOnlineURL == topic.share_url))
-                        continue;
-                    var housePrice = JiebaTools.GetHousePrice(topic.content);
-                    var house = new DoubanHouseInfo()
-                    {
-                        HouseLocation = topic.title,
-                        HouseTitle = topic.title,
-                        HouseOnlineURL = topic.share_url,
-                        HouseText = topic.content,
-                        HousePrice = JiebaTools.GetHousePrice(topic.content),
-                        IsAnalyzed = true,
-                        DisPlayPrice = housePrice > 0 ? $"{housePrice}元" : "",
-                        Source = ConstConfigurationName.Douban,
-                        LocationCityName = cityName,
-                        Status = 1,
-                        PubTime = DateTime.Parse(topic.created),
-                        DataCreateTime = DateTime.Now,
-                    };
-                    lstHouseInfo.Add(house);
-                }
-             }
+                    HouseLocation = topic["title"].ToString(),
+                    HouseTitle = topic["title"].ToString(),
+                    HouseOnlineURL = topic["share_url"].ToString(),
+                    HouseText = topic["content"].ToString(),
+                    HousePrice = housePrice,
+                    IsAnalyzed = true,
+                    DisPlayPrice = housePrice > 0 ? $"{housePrice}元" : "",
+                    Source = ConstConfigName.Douban,
+                    LocationCityName = cityName,
+                    Status = 1,
+                    PicURLs = JsonConvert.SerializeObject(photos),
+                    PubTime = topic["created"].ToObject<DateTime>()
+                };
+                lstHouseInfo.Add(house);
+            }
+
             return lstHouseInfo;
         }
 
-
-        private static void AnalyzeFromWebPage(Web.Model.DBHouseInfo houseInfo,
-            ref decimal housePrice, ref string houseTextContent)
+        private static string GetAPIResult(string apiURL)
         {
-            var htmlResult = DoubanHTTPHelper.GetHTMLForDouban(houseInfo.HouseOnlineURL);
-            //没有页面信息
-            if (string.IsNullOrEmpty(htmlResult))
+            try
             {
-                //404页面
-                houseInfo.Status = 2;
+                var client = new RestClient(apiURL);
+                var request = new RestRequest(Method.GET);
+                request.AddHeader("cache-control", "no-cache");
+                request.AddHeader("connection", "keep-alive");
+                request.AddHeader("x-requested-with", "XMLHttpRequest");
+                request.AddHeader("referer", apiURL);
+                request.AddHeader("accept", "*/*");
+                request.AddHeader("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1");
+                request.AddHeader("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
+                request.AddHeader("accept-encoding", "gzip, deflate, br");
+                request.AddHeader("cookie", "bid=qLvbOle-G58; ps=y; ue=^\\^codelover^@qq.com^^; push_noty_num=0; push_doumail_num=0; __utmz=30149280.1521636704.1.1.utmcsr=(direct)^|utmccn=(direct)^|utmcmd=(none); __utmv=30149280.15460; ll=^\\^108296^^; _vwo_uuid_v2=D87414308A33790472DBB4D2B1DC0DE7B^|6a9fc300e5ea8c7485f9a922d87e820b; __utma=30149280.2046746446.1521636704.1522567163.1522675073.3");
+                IRestResponse response = client.Execute(request);
+                if (response.IsSuccessful)
+                {
+                    return response.Content;
+                }
+
             }
-            else
+            catch (Exception ex)
             {
-                var page = HtmlParser.Parse(htmlResult);
-                var topicContent = page.QuerySelector("div.topic-content");
-                //没有帖子内容
-                if (topicContent == null || topicContent.QuerySelector("p") == null || topicContent.QuerySelector("p") == null)
-                {
-                    houseInfo.Status = 3;
-                }
-                else
-                {
-                    //获取帖子内容
-                    houseTextContent = topicContent.QuerySelector("p").TextContent;
-                    //获取价格信息
-                    housePrice = JiebaTools.GetHousePrice(houseTextContent);
-                    if (housePrice != 0 || !string.IsNullOrEmpty(houseTextContent))
-                    {
-                        houseInfo.Status = 1;
-                    }
-                    houseInfo.DisPlayPrice = housePrice.ToString(CultureInfo.InvariantCulture);
-                    houseInfo.HousePrice = housePrice;
-                    houseInfo.HouseText = houseTextContent;
-                }
+                LogHelper.Error("GetAPIResult", ex);
             }
+            return "";
+
         }
+
     }
 }

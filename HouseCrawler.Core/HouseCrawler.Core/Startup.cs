@@ -14,6 +14,8 @@ using NLog.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using NLog.Web;
 using HouseCrawler.Core.Common;
+using HouseCrawler.Core.Service;
+using HouseCrawler.Core.Jobs;
 
 namespace HouseCrawler.Core
 {
@@ -27,7 +29,6 @@ namespace HouseCrawler.Core
             var builder = new ConfigurationBuilder()
                 .SetBasePath(env.ContentRootPath)
                 .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
-
             Configuration = builder.Build();
         }
 
@@ -37,9 +38,58 @@ namespace HouseCrawler.Core
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddMvc();
-            services.Configure<ConnectionStrings>(Configuration);
-            services.AddTimedJob();
+            services.AddOptions().Configure<APPConfiguration>(Configuration);
+            InitDI(services);
+            //services.AddTimedJob();
             services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
+        }
+
+        public void InitDI(IServiceCollection services)
+        {
+            #region Mapper
+            services.AddSingleton<HouseDapper, HouseDapper>();
+            services.AddSingleton<ConfigDapper, ConfigDapper>();
+            #endregion Service
+
+            #region Service
+            services.AddSingleton<EmailService, EmailService>();
+            services.AddSingleton<RedisService, RedisService>();
+            services.AddSingleton<HouseDashboardService, HouseDashboardService>();
+            services.AddSingleton<ElasticsearchService, ElasticsearchService>();
+
+            #endregion
+
+            #region Jobs
+            services.AddSingleton<BaiXingJob, BaiXingJob>();
+            services.AddSingleton<DoubanCCBJob, DoubanCCBJob>();
+            services.AddSingleton<GCJob, GCJob>();
+            services.AddSingleton<HKSpaciousJob, HKSpaciousJob>();
+            services.AddSingleton<PingPaiPeopleJob, PingPaiPeopleJob>();
+            services.AddSingleton<RefreshDashboardJob, RefreshDashboardJob>();
+            services.AddSingleton<TodayHouseDashboardJob, TodayHouseDashboardJob>();
+            services.AddSingleton<ZuberMoguJob, ZuberMoguJob>();
+            services.AddSingleton<SyncHousesToESJob, SyncHousesToESJob>();
+            services.AddSingleton<RefreshHouseCacheJob, RefreshHouseCacheJob>();
+            services.AddSingleton<RefreshHouseSourceJob, RefreshHouseSourceJob>();
+
+
+            #endregion
+
+            #region Crawler
+            services.AddSingleton<CCBHouesCrawler, CCBHouesCrawler>();
+            services.AddSingleton<DoubanHouseCrawler, DoubanHouseCrawler>();
+            services.AddSingleton<DoubanHouseCrawler, DoubanHouseCrawler>();
+            services.AddSingleton<HKSpaciousCrawler, HKSpaciousCrawler>();
+            services.AddSingleton<MoGuHouseCrawler, MoGuHouseCrawler>();
+            services.AddSingleton<PeopleRentingCrawler, PeopleRentingCrawler>();
+            services.AddSingleton<PinPaiGongYuHouseCrawler, PinPaiGongYuHouseCrawler>();
+            services.AddSingleton<ZuberHouseCrawler, ZuberHouseCrawler>();
+            services.AddSingleton<BaiXingHouseCrawler, BaiXingHouseCrawler>();
+            services.AddSingleton<BeikeHouseCrawler, BeikeHouseCrawler>();
+            services.AddSingleton<ChengduZufangCrawler, ChengduZufangCrawler>();
+            
+
+            #endregion
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -47,15 +97,8 @@ namespace HouseCrawler.Core
         {
             //add NLog to .NET Core
             loggerFactory.AddNLog();
-
-            //Enable ASP.NET Core features (NLog.web) - only needed for ASP.NET Core users
-            app.AddNLogWeb();
-
             //needed for non-NETSTANDARD platforms: configure nlog.config in your project root. NB: you need NLog.Web.AspNetCore package for this. 
-            
-            env.ConfigureNLog("./wwwroot/nlog.config");
-
-           
+            env.ConfigureNLog("Resources/nlog.config");
 
             if (env.IsDevelopment())
             {
@@ -64,40 +107,22 @@ namespace HouseCrawler.Core
             }
 
             //使用TimedJob
-            app.UseTimedJob();
+            // app.UseTimedJob();
 
             app.UseStaticFiles();
-           
+
 
             app.UseMvcWithDefaultRoute();
             app.UseMvc(routes =>
             {
                 routes.MapRoute(
                     name: "default",
-                    template: "{controller=House}/{action=Index}/{id?}"); 
+                    template: "{controller=House}/{action=Index}/{id?}");
             });
+
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-
-            AppSettings.CityJsonFilePath = Path.Combine(env.WebRootPath, "DomainJS//pv.json");
-
-            ConnectionStrings.MySQLConnectionString = new ConfigurationBuilder()
-             .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json").Build()["ConnectionStrings:MySQLConnectionString"];
-
-            AppSettings.DoubanAccount = new ConfigurationBuilder()
-             .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json").Build()["DoubanAccount"];
-            AppSettings.DoubanPassword = new ConfigurationBuilder()
-             .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json").Build()["DoubanPassword"];
-
-            DoubanHTTPHelper.InitCookieCollection();
-
-            DomainProxyInfo.InitDomainProxyInfo(Path.Combine(env.WebRootPath, "availableProxy.json"));
-
-          
         }
     }
 }
